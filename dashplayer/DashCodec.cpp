@@ -1086,8 +1086,28 @@ status_t DashCodec::configureCodec(
       int32_t haveNativeWindow = msg->findObject("native-window", &obj) &&
             obj != NULL;
     mStoreMetaDataInOutputBuffers = false;
+
+    bool mEnableDynamicBuffering = true;
+    char property_value[PROPERTY_VALUE_MAX];
+    property_value[0] = '\0';
+    property_get("persist.dash.dbm.enable", property_value, "1");
+    if(*property_value)
+    {
+      mEnableDynamicBuffering = atoi(property_value) > 0 ? true: false;
+      ALOGE("DynamicBuffering is set to [%d]", mEnableDynamicBuffering);
+    }
       if (!encoder && video && haveNativeWindow) {
-        err = mOMX->storeMetaDataInBuffers(mNode, kPortIndexOutput, OMX_TRUE);
+
+        if (mEnableDynamicBuffering)
+        {
+          ALOGE("Enabling Dynamic Buffering Mode");
+          err = mOMX->storeMetaDataInBuffers(mNode, kPortIndexOutput, OMX_TRUE);
+        }
+        else
+        {
+            ALOGE("Disabling Dynamic Buffering Mode Thru SetProp");
+            err =  INVALID_OPERATION;
+        }
         if (err != OK) {
 
             ALOGE("[%s] storeMetaDataInBuffers failed w/ err %d",
@@ -3055,6 +3075,20 @@ void DashCodec::BaseState::onInputBufferFilled(const sp<AMessage> &msg) {
                          mCodec->mComponentName.c_str());
                 }
 
+                if (mCodec->mStoreMetaDataInOutputBuffers) {
+                    // try to submit an output buffer for each input buffer
+                    PortMode outputMode = getPortMode(kPortIndexOutput);
+
+                    ALOGV("MetaDataBuffersToSubmit=%u portMode=%s",
+                            mCodec->mMetaDataBuffersToSubmit,
+                            (outputMode == FREE_BUFFERS ? "FREE" :
+                             outputMode == KEEP_BUFFERS ? "KEEP" : "RESUBMIT"));
+                    if (outputMode == RESUBMIT_BUFFERS) {
+                        CHECK_EQ(mCodec->submitOutputMetaDataBuffer(),
+                                (status_t)OK);
+                    }
+                }
+
                 ALOGV("[%s] calling emptyBuffer %p signalling EOS",
                      mCodec->mComponentName.c_str(), bufferID);
 
@@ -3571,19 +3605,6 @@ bool DashCodec::LoadedState::onConfigureComponent(
         mCodec->mFlags |= kFlagIsSecureOPOnly;
     }
 
-    AString mime;
-    CHECK(msg->findString("mime", &mime));
-
-    status_t err = mCodec->configureCodec(mime.c_str(), msg);
-
-    if (err != OK) {
-        ALOGE("[%s] configureCodec returning error %d",
-              mCodec->mComponentName.c_str(), err);
-
-        mCodec->signalError(OMX_ErrorUndefined, err);
-        return false;
-    }
-
     sp<RefBase> obj;
     if (msg->findObject("native-window", &obj)
             && strncmp("OMX.google.", mCodec->mComponentName.c_str(), 11)) {
@@ -3597,6 +3618,19 @@ bool DashCodec::LoadedState::onConfigureComponent(
                 NATIVE_WINDOW_SCALING_MODE_SCALE_TO_WINDOW);
     }
     CHECK_EQ((status_t)OK, mCodec->initNativeWindow());
+
+    AString mime;
+    CHECK(msg->findString("mime", &mime));
+
+    status_t err = mCodec->configureCodec(mime.c_str(), msg);
+
+    if (err != OK) {
+        ALOGE("[%s] configureCodec returning error %d",
+              mCodec->mComponentName.c_str(), err);
+
+        mCodec->signalError(OMX_ErrorUndefined, err);
+        return false;
+    }
 
     {
         sp<AMessage> notify = mCodec->mNotify->dup();
