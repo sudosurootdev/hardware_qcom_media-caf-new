@@ -311,6 +311,14 @@ void DashPlayer::onMessageReceived(const sp<AMessage> &msg) {
             /*  TODO: Dynamic disible and reenable of video also requies support    */
             /* from dash source.                                                    */
             ALOGV("kWhatSetVideoNativeWindow");
+
+/*
+              if existing instance mNativeWindow=NULL, just set mNativeWindow to the new value passed
+              postScanSources() called below to handle use case
+                 - Initial valid nativewindow
+                 - first call from app to set nativewindow to null but mVideoDecoder exists. So scansources loop will not be running
+                 - second call to set nativewindow to valid object. Enters below if() portion. Need to trigger scansources to instatiate mVideoDecoder
+            */
             if(mNativeWindow == NULL)
             {
             sp<RefBase> obj;
@@ -330,18 +338,31 @@ void DashPlayer::onMessageReceived(const sp<AMessage> &msg) {
               break;
             }
 
-            mDeferredActions.push_back(new ShutdownDecoderAction(
-                                       false /* audio */, true /* video */));
+/* Already existing valid mNativeWindow and valid mVideoDecoder
+                 - Perform shutdown sequence
+                 - postScanSources() to instantiate mVideoDecoder with the new native window object.
+               If no mVideoDecoder existed, and new nativewindow set to NULL push blank buffers to native window (embms audio only switch use case)
+            */
 
             sp<RefBase> obj;
             CHECK(msg->findObject("native-window", &obj));
+
+            if(mVideoDecoder == NULL && obj.get() == NULL)
+            {
+              sp<ANativeWindow> nativeWindow = mNativeWindow->getNativeWindow();
+              DashCodec::PushBlankBuffersToNativeWindow(nativeWindow);
+            }
+
+            mDeferredActions.push_back(new ShutdownDecoderAction(
+                                       false /* audio */, true /* video */));
+
             ALOGE("kWhatSetVideoNativeWindow old nativewindow  %p", mNativeWindow.get());
             ALOGE("kWhatSetVideoNativeWindow new nativewindow  %p", obj.get());
 
             mDeferredActions.push_back(
             new SetSurfaceAction(static_cast<NativeWindowWrapper *>(obj.get())));
 
-            if (obj != NULL) {
+            if (obj.get() != NULL) {
             // If there is a new surface texture, instantiate decoders
             // again if possible.
             mDeferredActions.push_back(
@@ -666,6 +687,13 @@ void DashPlayer::onMessageReceived(const sp<AMessage> &msg) {
                 }
             } else if (what == DashCodec::kWhatShutdownCompleted) {
                 ALOGV("%s shutdown completed", mTrackName);
+
+                if((track == kAudio && mFlushingAudio == SHUT_DOWN)
+                  || (track == kVideo && mFlushingVideo == SHUT_DOWN))
+                {
+                  return;
+                }
+
                 if (track == kAudio) {
                     ALOGV("@@@@:: Dashplayer :: MESSAGE FROM DASHCODEC +++++++++++++++++++++++++++++++ kWhatShutdownCompleted:: audio");
                     if (mAudioDecoder != NULL) {
@@ -673,7 +701,6 @@ void DashPlayer::onMessageReceived(const sp<AMessage> &msg) {
                     }
                     mAudioDecoder.clear();
 
-                    CHECK_EQ((int)mFlushingAudio, (int)SHUTTING_DOWN_DECODER);
                     mFlushingAudio = SHUT_DOWN;
                 } else if (track == kVideo) {
                     ALOGV("@@@@:: Dashplayer :: MESSAGE FROM DASHCODEC +++++++++++++++++++++++++++++++ kWhatShutdownCompleted:: Video");
@@ -682,7 +709,6 @@ void DashPlayer::onMessageReceived(const sp<AMessage> &msg) {
                     }
                     mVideoDecoder.clear();
 
-                    CHECK_EQ((int)mFlushingVideo, (int)SHUTTING_DOWN_DECODER);
                     mFlushingVideo = SHUT_DOWN;
                 }
 
@@ -699,7 +725,7 @@ void DashPlayer::onMessageReceived(const sp<AMessage> &msg) {
                     mRenderer->queueEOS(track, UNKNOWN_ERROR);
                 }
                   else{
-                    ALOGE("EOS not queued for %s track", track);
+                    ALOGE("EOS not queued for %d track", track);
                   }
                 }
             } else if (what == DashCodec::kWhatDrainThisBuffer) {
@@ -1859,6 +1885,10 @@ status_t DashPlayer::getParameter(int key, Parcel *reply)
        {
          ALOGE("DashPlayer::getParameter KEY_DASH_REPOSITION_RANGE err in NOT OK");
        }
+    }
+    else if(key == INVOKE_ID_GET_TRACK_INFO)
+    {
+      err = mSource->getTrackInfo(reply);
     }
     else
     {

@@ -65,6 +65,9 @@ struct DashCodec : public AHierarchicalStateMachine {
     void signalRequestIDRFrame();
     void queueNextFormat();
     void clearCachedFormats();
+
+    static status_t PushBlankBuffersToNativeWindow(sp<ANativeWindow> nativeWindow);
+
     struct PortDescription : public RefBase {
         size_t countBuffers();
         IOMX::buffer_id bufferIDAt(size_t index) const;
@@ -111,6 +114,7 @@ private:
         kWhatConfigureComponent      = 'conf',
         kWhatStart                   = 'star',
         kWhatRequestIDRFrame         = 'ridr',
+        kWhatWaitForPortEnable       = 'wfpe',
     };
 
     enum {
@@ -120,7 +124,8 @@ private:
 
     enum {
         kFlagIsSecure   = 1,
-        kFlagIsSecureOPOnly = 2
+        kFlagIsSecureOPOnly = 2,
+        kFlagPushBlankBuffersToNativeWindowOnShutdown = 4
     };
 
     struct BufferInfo {
@@ -267,8 +272,6 @@ private:
     status_t setupErrorCorrectionParameters();
 
     status_t initNativeWindow();
-
-    status_t pushBlankBuffersToNativeWindow();
 
     // Returns true iff all buffers on the given port have status OWNED_BY_US.
     bool allYourBuffersAreBelongToUs(OMX_U32 portIndex);
